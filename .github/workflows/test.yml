@@ -8,18 +8,20 @@ on: # rebuild any PRs and main branch changes
     tags:
       - 'v*'
 
-env:
-  SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+permissions:
+  contents: read
 
 jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
     - id: checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      with:
+        persist-credentials: false
     - id: install
       run: |
-        npm install
+        npm ci
     - id: format-check
       run: |
         npm run format-check
@@ -29,78 +31,71 @@ jobs:
     - run: npm run build && npm run package
     - uses: ./
       with:
+        webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
         status: ${{ job.status }}
         channel: '#actions'
         message: lint error
-      if: failure()
+      if: ${{ failure() && github.event_name != 'pull_request' }}
 
   test:
     runs-on: ubuntu-latest
     steps:
     - id: checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       with:
         ref: ${{ github.event.pull_request.head.sha }}
+        persist-credentials: false
     - id: install-and-build
       run: |
-        npm install
+        npm ci
         npm run build
         npm run package
     - uses: ./
       with:
+        webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
         status: starting
         channel: '#actions'
-    - id: dump_github
-      name: Dump GitHub context
-      env:
-        GITHUB_CONTEXT: ${{ toJson(github) }}
-      run: echo "$GITHUB_CONTEXT"
-    - id: dump_job
-      name: Dump job context
-      env:
-        JOB_CONTEXT: ${{ toJson(job) }}
-      run: echo "$JOB_CONTEXT"
-    - id: dump_steps
-      name: Dump steps context
-      env:
-        STEPS_CONTEXT: ${{ toJson(steps) }}
-      run: echo "$STEPS_CONTEXT"
+      if: ${{ github.event_name != 'pull_request' }}
     - id: test
       run: |
         npm run test
     - uses: ./
       with:
+        webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
         status: ${{ job.status }}
         steps: ${{ toJson(steps) }}
         channel: '#actions'
         config: __tests__/fixtures/slack-legacy.yml
-      if: always()
+      if: ${{ always() && github.event_name != 'pull_request' }}
     - uses: ./
       with:
+        webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
         status: ${{ job.status }}
         steps: ${{ toJson(steps) }}
         channel: '#actions'
         config: __tests__/fixtures/slack-blocks.yml
-      if: always()
+      if: ${{ always() && github.event_name != 'pull_request' }}
 
   build:
     runs-on: ubuntu-latest
     steps:
     - id: checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       with:
         ref: ${{ github.event.pull_request.head.sha }}
+        persist-credentials: false
     - id: install-nodejs
-      uses: actions/setup-node@v6
+      uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
       with:
         node-version: 24
     - id: build
       run: |
-        npm install
+        npm ci
         npm run all
     - uses: ./
       with:
+        webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
         status: ${{ job.status }}
         steps: ${{ toJson(steps) }}
         channel: '#actions'
-      if: always()
+      if: ${{ always() && github.event_name != 'pull_request' }}

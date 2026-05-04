@@ -5,14 +5,6 @@ import {existsSync, readFileSync} from 'fs'
 
 async function run(): Promise<void> {
   try {
-    // debug output of environment variables and event payload
-    for (const k of Object.keys(process.env).sort((a, b) => a.localeCompare(b))) {
-      core.debug(`${k} = ${process.env[k]}`)
-    }
-    const event = process.env.GITHUB_EVENT_PATH as string
-    const readEvent = (): object => JSON.parse(readFileSync(event, 'utf8'))
-    core.debug(JSON.stringify(readEvent()))
-
     const configFile = core.getInput('config', {required: false})
     let config: ConfigOptions = {}
     try {

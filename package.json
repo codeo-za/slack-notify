@@ -35,6 +35,10 @@
     "handlebars": "^4.7.9",
     "js-yaml": "^4.1.1"
   },
+  "overrides": {
+    "axios": "1.16.0",
+    "follow-redirects": "1.16.0"
+  },
   "devDependencies": {
     "@types/istanbul-lib-report": "^3.0.0",
     "@types/jest": "^29.5.12",
