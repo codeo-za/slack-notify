@@ -2,8 +2,25 @@ import * as core from '@actions/core'
 import * as github from '@actions/github'
 import {Block, KnownBlock, MessageAttachment} from '@slack/types'
 import {IncomingWebhook, IncomingWebhookResult} from '@slack/webhook'
-import {IssueCommentEvent, IssuesEvent, PullRequestEvent, PushEvent} from '@octokit/webhooks-definitions/schema' // eslint-disable-line import/no-unresolved
+import type {IssueCommentEvent, IssuesEvent, PullRequestEvent, PushEvent} from '@octokit/webhooks-types'
 import Handlebars from './handlebars'
+
+function escapeHandlebars(obj: any): any {
+  if (typeof obj === 'string') {
+    return JSON.stringify(obj.replace(/\{\{/g, '\\{{')).slice(1, -1)
+  }
+  if (Array.isArray(obj)) {
+    return obj.map(escapeHandlebars)
+  }
+  if (obj !== null && typeof obj === 'object') {
+    const result: Record<string, unknown> = {}
+    for (const [key, value] of Object.entries(obj)) {
+      result[key] = escapeHandlebars(value)
+    }
+    return result
+  }
+  return obj
+}
 
 const DEFAULT_USERNAME = 'GitHub Actions'
 const DEFAULT_ICON_URL = 'https://octodex.github.com/images/original.png'
@@ -120,6 +137,7 @@ export interface ConfigOptions {
   fallback?: string
   fields?: Field[]
   blocks?: (Actions | Context | Divider | File | Header | Image | Input | Section)[]
+  blocks_only?: boolean
   footer?: string
   colors?: object
   icons?: object
@@ -133,10 +151,14 @@ export async function send(
   jobStatus: string,
   jobSteps: object,
   jobMatrix: object,
+  jobInputs: object,
   channel?: string,
   message?: string,
   opts?: ConfigOptions
 ): Promise<IncomingWebhookResult> {
+  // Filter out steps with auto-generated hex hash IDs (steps without an explicit "id")
+  const namedSteps = Object.fromEntries(Object.entries(jobSteps).filter(([key]) => !/^[0-9a-f]{32}$/.test(key)))
+
   const eventName = process.env.GITHUB_EVENT_NAME
   const workflow = process.env.GITHUB_WORKFLOW
   const repositoryName = process.env.GITHUB_REPOSITORY
@@ -243,7 +265,7 @@ export async function send(
   const fallbackTemplate = Handlebars.compile(opts?.fallback || defaultFallback)
 
   const defaultFields = []
-  if (Object.entries(jobSteps).length) {
+  if (Object.entries(namedSteps).length) {
     defaultFields.push({
       title: 'Job Steps',
       value: '{{#each jobSteps}}{{icon this.outcome}} {{@key}}\n{{~/each}}',
@@ -255,6 +277,14 @@ export async function send(
     defaultFields.push({
       title: 'Job Matrix',
       value: '{{#each jobMatrix}}{{@key}}: {{this}}\n{{~/each}}',
+      short: false,
+      if: 'always()'
+    })
+  }
+  if (Object.entries(jobInputs).length) {
+    defaultFields.push({
+      title: 'Job Inputs',
+      value: '{{#each jobInputs}}{{@key}}: {{this}}\n{{~/each}}',
       short: false,
       if: 'always()'
     })
@@ -271,18 +301,19 @@ export async function send(
       })
     }
   }
-  const fieldsTemplate = Handlebars.compile(JSON.stringify(filteredFields))
+  const fieldsTemplate = Handlebars.compile(JSON.stringify(filteredFields), {noEscape: true})
 
   const defaultFooter = '<{{repositoryUrl}}|{{repositoryName}}> #{{runNumber}}'
   const footerTemplate = Handlebars.compile(opts?.footer || defaultFooter)
 
   const data = {
     env: process.env,
-    payload: payload || {},
+    payload: escapeHandlebars(payload || {}),
     jobName,
     jobStatus,
-    jobSteps,
+    jobSteps: namedSteps,
     jobMatrix,
+    jobInputs,
     eventName,
     workflow,
     workflowUrl,
@@ -301,7 +332,7 @@ export async function send(
     refUrl,
     diffRef,
     diffUrl,
-    description,
+    description: escapeHandlebars(description),
     sender,
     ts
   }
@@ -310,9 +341,13 @@ export async function send(
   const title = titleTemplate(data)
   const text = textTemplate(data)
   const fallback = fallbackTemplate(data)
+  // Handlebars may interpolate strings containing JSON-unsafe characters (newlines, quotes, etc.)
+  // into JSON templates. Sanitize the rendered output before parsing.
+  const sanitizeJsonString = (s: string): string =>
+    s.replace(/[\x00-\x1f\x7f]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'))
   const fieldsJson = fieldsTemplate(data)
   core.debug(fieldsJson.toString())
-  const fields = JSON.parse(fieldsTemplate(data))
+  const fields = JSON.parse(sanitizeJsonString(fieldsTemplate(data)))
   const footer = footerTemplate(data)
 
   const filteredBlocks: object[] = []
@@ -324,24 +359,27 @@ export async function send(
       filteredBlocks.push(blockWithoutIf as KnownBlock | Block)
     }
   }
-  const blocksTemplate = Handlebars.compile(JSON.stringify(filteredBlocks))
+  const blocksTemplate = Handlebars.compile(JSON.stringify(filteredBlocks), {noEscape: true})
 
   // allow blocks to reference templated fields
+  const jsonSafe = (s: string): string => JSON.stringify(s).slice(1, -1)
   const blockContext = {
-    pretext,
-    title,
+    pretext: jsonSafe(pretext),
+    title: jsonSafe(title),
     title_link: opts?.title_link,
-    text,
-    fallback,
-    footer,
+    text: jsonSafe(text),
+    fallback: jsonSafe(fallback),
+    footer: jsonSafe(footer),
     footer_icon: DEFAULT_FOOTER_ICON
   }
   const blocksJson = blocksTemplate({...data, ...blockContext})
   core.debug(blocksJson.toString())
-  const blocks = JSON.parse(blocksTemplate({...data, ...blockContext}))
+  const blocks = JSON.parse(sanitizeJsonString(blocksTemplate({...data, ...blockContext})))
 
-  const attachments: MessageAttachment[] = [
-    {
+  const attachments: MessageAttachment[] = []
+
+  if (!opts?.blocks_only) {
+    attachments.push({
       mrkdwn_in: ['pretext' as const, 'text' as const, 'fields' as const],
       color: jobColor(jobStatus, opts?.colors),
       pretext,
@@ -356,8 +394,8 @@ export async function send(
       footer,
       footer_icon: DEFAULT_FOOTER_ICON,
       ts: ts.toString()
-    }
-  ]
+    })
+  }
 
   if (opts?.blocks) {
     attachments.push({
@@ -376,5 +414,20 @@ export async function send(
   core.debug(JSON.stringify(postMessage))
 
   const webhook = new IncomingWebhook(url)
-  return await webhook.send(postMessage)
+
+  const maxRetries = 3
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await webhook.send(postMessage)
+    } catch (error) {
+      if (attempt === maxRetries) {
+        throw error
+      }
+      const delay = attempt * 1000
+      core.warning(`Slack webhook attempt ${attempt}/${maxRetries} failed, retrying in ${delay}ms...`)
+      await new Promise(resolve => setTimeout(resolve, delay))
+    }
+  }
+
+  throw new Error('Slack webhook failed after all retries')
 }

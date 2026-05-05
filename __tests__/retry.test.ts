@@ -8,12 +8,9 @@ const url = 'https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXX
 const jobName = 'Build and Test'
 const jobStatus = 'Success'
 const jobSteps = {}
-const jobMatrix = {
-  name1: 'value1',
-  name2: 'value2'
-}
+const jobMatrix = {}
 const jobInputs = {}
-const channel = '@override'
+const channel = '#github-ci'
 const message = undefined
 
 // mock github context
@@ -46,50 +43,32 @@ process.env.GITHUB_SERVER_URL = 'https://github.com'
 process.env.GITHUB_API_URL = 'https://github.com'
 process.env.GITHUB_GRAPHQL_URL = 'https://api.github.com/graphql'
 
-test('push event to slack', async () => {
-  const mockAxios = new MockAdapter(axios, {delayResponse: 200})
+test('retries on transient network error then succeeds', async () => {
+  const mockAxios = new MockAdapter(axios, {delayResponse: 50})
 
-  mockAxios
-    .onPost()
-    .reply(config => {
-      console.log(config.data)
-      return [200, {status: 'ok'}]
-    })
-    .onAny()
-    .reply(500)
+  let callCount = 0
+  mockAxios.onPost().reply(() => {
+    callCount++
+    if (callCount < 3) {
+      return [500, 'Internal Server Error']
+    }
+    return [200, {status: 'ok'}]
+  })
 
   const res = await send(url, jobName, jobStatus, jobSteps, jobMatrix, jobInputs, channel, message)
   await expect(res).toStrictEqual({text: {status: 'ok'}})
+  expect(callCount).toBe(3)
 
-  expect(JSON.parse(mockAxios.history.post[0].data)).toStrictEqual({
-    username: 'GitHub Actions',
-    icon_url: 'https://octodex.github.com/images/original.png',
-    channel: '@override',
-    timeout: 0,
-    attachments: [
-      {
-        fallback: '[GitHub]: [act10ns/slack] build-test push Success',
-        color: 'good',
-        author_name: 'satterly',
-        author_link: 'https://github.com/satterly',
-        author_icon: 'https://avatars0.githubusercontent.com/u/615057?v=4',
-        mrkdwn_in: ['pretext', 'text', 'fields'],
-        pretext: '',
-        text: '*<https://github.com/act10ns/slack/actions?query=workflow:%22build-test%22|Workflow _build-test_ job _Build and Test_ triggered by _push_ is _Success_>* for <https://github.com/act10ns/slack/commits/master|`master`>\n<https://github.com/act10ns/slack/compare/db9fe60430a6...68d48876e079|`68d48876`> - 4 commits',
-        title: '',
-        fields: [
-          {
-            title: 'Job Matrix',
-            value: 'name1: value1\nname2: value2\n',
-            short: false
-          }
-        ],
-        footer: '<https://github.com/act10ns/slack|act10ns/slack> #8',
-        footer_icon: 'https://github.githubassets.com/favicon.ico',
-        ts: expect.stringMatching(/[0-9]+/)
-      }
-    ]
-  })
+  mockAxios.resetHistory()
+  mockAxios.reset()
+})
+
+test('throws after exhausting all retries', async () => {
+  const mockAxios = new MockAdapter(axios, {delayResponse: 50})
+
+  mockAxios.onPost().reply(500, 'Internal Server Error')
+
+  await expect(send(url, jobName, jobStatus, jobSteps, jobMatrix, jobInputs, channel, message)).rejects.toThrow()
 
   mockAxios.resetHistory()
   mockAxios.reset()

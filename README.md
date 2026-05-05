@@ -58,7 +58,9 @@ message using:
         status: ${{ job.status }}
         steps: ${{ toJson(steps) }}
 
-**Note: Only steps that have a "step id" will be reported on. See example below.**
+**Note: Only steps that have an explicit "step id" will be reported on. Steps without
+an `id` are assigned auto-generated hex hash identifiers by GitHub Actions (e.g.
+`58764083063d40139891dda6fb4654d2`) and are automatically filtered out. See example below.**
 
 #### `matrix` (optional)
 Parameters for [matrix jobs](https://docs.github.com/en/actions/using-jobs/using-a-matrix-for-your-jobs) can be included in Slack messages:
@@ -68,6 +70,17 @@ Parameters for [matrix jobs](https://docs.github.com/en/actions/using-jobs/using
         matrix: ${{ toJson(matrix) }}
 
 <img src="./docs/images/example4.png" width="505" title="Slack Example #4">
+
+#### `inputs` (optional)
+Parameters for [`workflow_call`](https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#workflow_call) or [`workflow_dispatch`](https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#workflow_dispatch) events can be included in Slack messages:
+
+      with:
+        status: ${{ job.status }}
+        inputs: ${{ toJson(inputs) }}
+
+<img src="docs/images/example5.png" width="358" title="Slack Example #5">
+
+<img src="docs/images/example6.png" width="571" title="Slack Example #6">
 
 #### `channel` (optional)
 
@@ -81,14 +94,14 @@ use:
 **Note: To override the channel the Slack webhook URL must be an
 Incoming Webhook URL. See https://api.slack.com/faq#incoming_webhooks**
 
-### `message` (optional)
+#### `message` (optional)
 
 To override the slack message use:
 
       with:
         status: ${{ job.status }}
         channel: '#workflows'
-        message: Deploying {{ env.GITHUB_REF_NAME }} branch
+        message: Deploying {{env.GITHUB_REF_NAME}} branch
 
 ### `config` (optional)
 
@@ -102,6 +115,7 @@ A configuration file can be used to customise the following Slack message fields
   - `fallback` plain text summary used for dumb clients and notifications
   - `fields` title, value and short/long
   - `blocks` including `actions`, `context`, `divider`, `file`,  `header`, `image`, `input` and `section` blocks
+  - `blocks_only` set to `true` to send only blocks without the default legacy attachment
   - message `footer`
   - border `colors` based job status `success`, `failure`, `cancelled`. valid colors are `good` (green), `warning` (yellow), `danger` (red) or any hex color code eg. `#439FE0`
   - `icons` for step status `success`, `failure`, `cancelled`, `skipped`, and a default
@@ -123,10 +137,38 @@ The following Slack [message fields](https://api.slack.com/reference/messaging/a
 - `fields` `title` and `value`
 - `blocks`
 
-**Supported Template variables**
+**Supported Template Variables**
 
-`env.*`, `payload.*`, `jobName`, `jobStatus`, `jobSteps`, `jobMatrix`,
-`eventName`, `workflow`, `workflowUrl`, `workflowRunUrl`, `repositoryName`, `repositoryUrl`, `runId`, `runNumber`, `sha`, `shortSha`, `branch`, `actor`, `action`, `ref`, `refType`, `refUrl`, `diffRef`, `diffUrl`, `description`, `sender`
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `env.*` | All environment variables | `{{env.MY_VAR}}` |
+| `payload.*` | Full GitHub event payload (`github.event`) | `{{payload.repository.name}}`, `{{payload.commits}}` |
+| `jobName` | Current job name | `{{jobName}}` |
+| `jobStatus` | Current job status | `{{jobStatus}}` |
+| `jobSteps.*` | Step outcomes keyed by step id | `{{jobSteps.build.outcome}}` |
+| `jobMatrix.*` | Matrix properties | `{{jobMatrix.os}}` |
+| `jobInputs.*` | Workflow dispatch/call inputs | `{{jobInputs.environment}}` |
+| `eventName` | GitHub event name | `{{eventName}}` |
+| `workflow` | Workflow name | `{{workflow}}` |
+| `workflowUrl` | Workflow runs URL | `{{workflowUrl}}` |
+| `workflowRunUrl` | Current workflow run URL | `{{workflowRunUrl}}` |
+| `repositoryName` | Repository (owner/repo) | `{{repositoryName}}` |
+| `repositoryUrl` | Repository URL | `{{repositoryUrl}}` |
+| `runId` | Workflow run ID | `{{runId}}` |
+| `runNumber` | Workflow run number | `{{runNumber}}` |
+| `sha` | Full commit SHA | `{{sha}}` |
+| `shortSha` | Short commit SHA (8 chars) | `{{shortSha}}` |
+| `branch` | Branch name | `{{branch}}` |
+| `actor` | User who triggered the workflow | `{{actor}}` |
+| `action` | Event action (e.g. opened, closed) | `{{action}}` |
+| `ref` | Branch or tag ref | `{{ref}}` |
+| `refType` | Ref type (branch or tag) | `{{refType}}` |
+| `refUrl` | URL to the ref | `{{refUrl}}` |
+| `diffRef` | Diff reference (commit or branch) | `{{diffRef}}` |
+| `diffUrl` | URL to the diff/compare view | `{{diffUrl}}` |
+| `description` | Event-specific description | `{{description}}` |
+| `sender.*` | User who triggered the event | `{{sender.login}}`, `{{sender.avatar_url}}` |
+| `ts` | Current Unix timestamp | `{{ts}}` |
 
 **Helper Functions**
 
@@ -215,6 +257,21 @@ icons:
   default: ':interrobang:'
 ```
 
+*Blocks-only mode:*
+
+To send only blocks without the default legacy attachment, set `blocks_only: true`
+in the config file:
+
+```
+blocks_only: true
+
+blocks:
+  - type: section
+    text:
+      type: mrkdwn
+      text: "*{{jobName}}* is *{{jobStatus}}*"
+```
+
 *Notes:*
 
 * If template expressions occur at the start of a string the string must be double-quoted eg. `pretext: "{{eventName}} triggered by {{actor}}"`
@@ -255,7 +312,9 @@ To include statuses for each Job Step in the message include the
         steps: ${{ toJson(steps) }}
       if: always()
 
-Only steps that have a "step id" assigned to them will be reported on:
+Only steps that have an explicit "step id" assigned to them will be reported on.
+Steps without an `id` are automatically filtered out because GitHub Actions assigns
+them auto-generated 32-character hex identifiers that are not meaningful:
 
     - name: Build
       id: build
@@ -267,16 +326,23 @@ The default Slack channel for the configured webhook can be overridden
 using either another channel name `#channel` or a username `@username`.
 
     - uses: act10ns/slack@v2
-      with: 
+      with:
         status: ${{ job.status }}
         channel: '#workflows'
 
 or
 
     - uses: act10ns/slack@v2
-      with: 
+      with:
         status: ${{ job.status }}
         channel: '@nick'
+
+Multiple channels can be specified, separated by spaces or commas:
+
+    - uses: act10ns/slack@v2
+      with:
+        status: ${{ job.status }}
+        channel: '#channel1, #channel2, @nick'
 
 ### Complete example
 
@@ -304,7 +370,7 @@ or
             uses: actions/checkout@v4
           - name: Variables
             id: vars
-            run: echo "::set-output name=SHORT_COMMIT_ID::$(git rev-parse --short HEAD)"
+            run: echo "SHORT_COMMIT_ID=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
           - name: Build image
             id: docker-build
             run: >-
@@ -332,21 +398,67 @@ The above "Docker Build and Push" workflow will appear in Slack as:
 
 <img src="./docs/images/example2.png" width="700" title="Slack Example #2">
 
+### Workflow-level status
+
+To report on the overall status of a workflow with multiple jobs, add a
+final job that depends on all other jobs using `needs` and `if: always()`.
+Use the `needs` context to summarise the result of each job:
+
+    name: Release
+
+    on:
+      push:
+        branches: [ master ]
+
+    jobs:
+      build:
+        runs-on: ubuntu-latest
+        steps:
+          - uses: actions/checkout@v4
+          - run: npm run build
+
+      test:
+        runs-on: ubuntu-latest
+        needs: build
+        steps:
+          - uses: actions/checkout@v4
+          - run: npm test
+
+      deploy:
+        runs-on: ubuntu-latest
+        needs: test
+        steps:
+          - run: echo "Deploying..."
+
+      notify:
+        runs-on: ubuntu-latest
+        needs: [build, test, deploy]
+        if: always()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        steps:
+          - uses: act10ns/slack@v2
+            with:
+              status: ${{ (contains(needs.*.result, 'failure') && 'failure') || 'success' }}
+              channel: '#workflows'
+              message: |
+                Release workflow: build=${{ needs.build.result }} test=${{ needs.test.result }} deploy=${{ needs.deploy.result }}
+
 ## Troubleshooting
 
 To enable runner diagnostic logging set the `ACTIONS_RUNNER_DEBUG` secret to `true`.
 
 To enable step debug logging set the `ACTIONS_STEP_DEBUG` secret to `true`.
 
-See https://docs.github.com/en/free-pro-team@latest/actions/managing-workflow-runs/enabling-debug-logging
+See https://docs.github.com/en/actions/monitoring-and-troubleshooting-workflows/troubleshooting-workflows/enabling-debug-logging
 
 ## References
 
 * GitHub Actions Toolkit https://github.com/actions/toolkit/tree/main/packages/github
 * GitHub Actions Starter Workflows https://github.com/actions/starter-workflows
 * Slack Incoming Webhooks https://slack.com/apps/A0F7XDUAZ-incoming-webhooks?next_id=0
-* Env vars https://docs.github.com/en/free-pro-team@latest/actions/reference/environment-variables
-* Webhook Payloads https://docs.github.com/en/free-pro-team@latest/developers/webhooks-and-events/webhook-events-and-payloads#webhook-payload-object-common-properties
+* Env vars https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/store-information-in-variables#default-environment-variables
+* Webhook Payloads https://docs.github.com/en/webhooks/webhook-events-and-payloads
 * GitHub Actions Cheat Sheet https://github.github.io/actions-cheat-sheet/actions-cheat-sheet.html
 * Slack Secondary message attachments https://api.slack.com/reference/messaging/attachments
 * Handlebars Language Guide https://handlebarsjs.com/guide/
@@ -355,4 +467,4 @@ See https://docs.github.com/en/free-pro-team@latest/actions/managing-workflow-ru
 
 ## License
 
-Copyright (c) 2020-2024 Nick Satterly. Available under the MIT License.
+Copyright (c) 2020-2026 Nick Satterly. Available under the MIT License.

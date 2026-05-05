@@ -10,7 +10,6 @@ const jobStatus = 'Success'
 const jobSteps = {}
 const jobMatrix = {}
 const jobInputs = {}
-const channel = '@override'
 const message = undefined
 
 // mock github context
@@ -43,44 +42,22 @@ process.env.GITHUB_SERVER_URL = 'https://github.com'
 process.env.GITHUB_API_URL = 'https://github.com'
 process.env.GITHUB_GRAPHQL_URL = 'https://api.github.com/graphql'
 
-test('push event to slack', async () => {
+test('sends to multiple channels', async () => {
   const mockAxios = new MockAdapter(axios, {delayResponse: 200})
 
-  mockAxios
-    .onPost()
-    .reply(config => {
-      console.log(config.data)
-      return [200, {status: 'ok'}]
-    })
-    .onAny()
-    .reply(500)
+  mockAxios.onPost().reply(200, {status: 'ok'}).onAny().reply(500)
 
-  const res = await send(url, jobName, jobStatus, jobSteps, jobMatrix, jobInputs, channel, message)
-  await expect(res).toStrictEqual({text: {status: 'ok'}})
+  const channels = ['#channel1', '#channel2', '@nick']
 
-  expect(JSON.parse(mockAxios.history.post[0].data)).toStrictEqual({
-    username: 'GitHub Actions',
-    icon_url: 'https://octodex.github.com/images/original.png',
-    channel: '@override',
-    timeout: 0,
-    attachments: [
-      {
-        fallback: '[GitHub]: [act10ns/slack] build-test push Success',
-        color: 'good',
-        author_name: 'satterly',
-        author_link: 'https://github.com/satterly',
-        author_icon: 'https://avatars0.githubusercontent.com/u/615057?v=4',
-        mrkdwn_in: ['pretext', 'text', 'fields'],
-        pretext: '',
-        text: '*<https://github.com/act10ns/slack/actions?query=workflow:%22build-test%22|Workflow _build-test_ job _Build and Test_ triggered by _push_ is _Success_>* for <https://github.com/act10ns/slack/commits/master|`master`>\n<https://github.com/act10ns/slack/compare/db9fe60430a6...68d48876e079|`68d48876`> - 4 commits',
-        title: '',
-        fields: [],
-        footer: '<https://github.com/act10ns/slack|act10ns/slack> #8',
-        footer_icon: 'https://github.githubassets.com/favicon.ico',
-        ts: expect.stringMatching(/[0-9]+/)
-      }
-    ]
-  })
+  for (const ch of channels) {
+    const res = await send(url, jobName, jobStatus, jobSteps, jobMatrix, jobInputs, ch, message)
+    await expect(res).toStrictEqual({text: {status: 'ok'}})
+  }
+
+  expect(mockAxios.history.post.length).toBe(3)
+
+  const sentChannels = mockAxios.history.post.map(req => JSON.parse(req.data).channel)
+  expect(sentChannels).toStrictEqual(['#channel1', '#channel2', '@nick'])
 
   mockAxios.resetHistory()
   mockAxios.reset()
